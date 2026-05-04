@@ -7,7 +7,7 @@ entity uart_engine is
         clk        : in  std_logic;
         rst        : in  std_logic;
 
-        -- RX FIFO
+        -- RX FIFO (Chu?n FWFT)
         empty_o    : in  std_logic;
         rdata_o    : in  std_logic_vector(7 downto 0);
         rd_i       : out std_logic;
@@ -30,7 +30,7 @@ architecture rtl of uart_engine is
 
     type state_type is (
         IDLE,
-        GET_HEADER, WAIT_HEADER,
+        WAIT_HEADER, -- Dùng làm tr?ng thái tr? 1 clock cho FWFT
         GET_CMD, WAIT_CMD,
         GET_ADDR, WAIT_ADDR,
         GET_LEN, WAIT_LEN,
@@ -63,123 +63,128 @@ begin
 process(clk, rst)
 begin
     if rst = '1' then
-        state   <= IDLE;
-        rd_i    <= '0';
-        wd_i    <= '0';
-        wr_en   <= '0';
-        rd_en   <= '0';
-	data_reg  <= (others => '0'); 
-	addr_reg <= (others => '0');
+        state     <= IDLE;
+        rd_i      <= '0';
+        wd_i      <= '0';
+        wr_en     <= '0';
+        rd_en     <= '0';
+        data_reg  <= (others => '0'); 
+        addr      <= (others => '0');
+        wdata     <= (others => '0');
+        wdata_i   <= (others => '0');
 
     elsif rising_edge(clk) then
 
-      
         rd_i  <= '0';
         wd_i  <= '0';
         wr_en <= '0';
         rd_en <= '0';
-		 
 
         case state is
 
+        -- =========================================
+        -- PH?N ??C GÓI TIN (Chu?n FWFT)
+        -- =========================================
         when IDLE =>
             if empty_o = '0' then
-                rd_i <= '1';
-                state <= WAIT_HEADER;
+                rd_i <= '1'; -- B?m nút ?? l?y byte ti?p theo
+                if rdata_o = x"55" then
+                    state <= WAIT_CMD;
+                else
+                    state <= WAIT_HEADER; -- N?u rác thì ch? 1 nh?p r?i v? IDLE
+                end if;
             end if;
 
         when WAIT_HEADER =>
-            if rdata_o = x"55" then
-                state <= GET_CMD;
-            else
-                state <= IDLE;
-            end if;
+            state <= IDLE; -- Ngh? 1 nh?p cho FIFO ??y rác ?i
+
+        when WAIT_CMD =>
+            state <= GET_CMD;
 
         when GET_CMD =>
             if empty_o = '0' then
-                rd_i <= '1';
-                state <= WAIT_CMD;
-            end if;
-
-        when WAIT_CMD =>
-            cmd      <= rdata_o;
-            chk_calc <= rdata_o;
-            state    <= GET_ADDR;
-
-        when GET_ADDR =>
-            if empty_o = '0' then
+                cmd <= rdata_o;
+                chk_calc <= rdata_o;
                 rd_i <= '1';
                 state <= WAIT_ADDR;
             end if;
 
         when WAIT_ADDR =>
-            addr_reg <= rdata_o;
-            chk_calc <= chk_calc xor rdata_o;
-            state <= GET_LEN;
+            state <= GET_ADDR;
 
-        when GET_LEN =>
+        when GET_ADDR =>
             if empty_o = '0' then
+                addr_reg <= rdata_o;
+                chk_calc <= chk_calc xor rdata_o;
                 rd_i <= '1';
                 state <= WAIT_LEN;
             end if;
 
         when WAIT_LEN =>
-            if unsigned(rdata_o) <= 4 then
-					data_reg  <= (others => '0'); 
-					
-                len <= to_integer(unsigned(rdata_o));
-                chk_calc <= chk_calc xor rdata_o;
-                byte_cnt <= 0;
+            state <= GET_LEN;
 
-                if unsigned(rdata_o) = 0 then
-                    state <= GET_CHK;
-                else
-                    state <= GET_DATA;
-                end if;
-            else
-                state <= IDLE;
-            end if;
-
-        when GET_DATA =>
+        when GET_LEN =>
             if empty_o = '0' then
-                rd_i <= '1';
-                state <= WAIT_DATA;
+                if unsigned(rdata_o) <= 4 then
+                    data_reg <= (others => '0'); -- Reset l?i thanh ghi data
+                    len <= to_integer(unsigned(rdata_o));
+                    chk_calc <= chk_calc xor rdata_o;
+                    byte_cnt <= 0;
+                    rd_i <= '1';
+                    
+                    if unsigned(rdata_o) = 0 then
+                        state <= WAIT_CHK;
+                    else
+                        state <= WAIT_DATA;
+                    end if;
+                else
+                    rd_i <= '1';
+                    state <= WAIT_HEADER; -- Sai Length thì h?y gói tin
+                end if;
             end if;
 
         when WAIT_DATA =>
-            case byte_cnt is
-                when 0 => data_reg(7 downto 0)   <= rdata_o;
-                when 1 => data_reg(15 downto 8)  <= rdata_o;
-                when 2 => data_reg(23 downto 16) <= rdata_o;
-                when 3 => data_reg(31 downto 24) <= rdata_o;
-                when others => null;
-            end case;
+            state <= GET_DATA;
 
-            chk_calc <= chk_calc xor rdata_o;
+        when GET_DATA =>
+            if empty_o = '0' then
+                case byte_cnt is
+                    when 0 => data_reg(7 downto 0)   <= rdata_o;
+                    when 1 => data_reg(15 downto 8)  <= rdata_o;
+                    when 2 => data_reg(23 downto 16) <= rdata_o;
+                    when 3 => data_reg(31 downto 24) <= rdata_o;
+                    when others => null;
+                end case;
 
-            if byte_cnt = len-1 then
-                state <= GET_CHK;
-            else
-                byte_cnt <= byte_cnt + 1;
-                state <= GET_DATA;
+                chk_calc <= chk_calc xor rdata_o;
+                rd_i <= '1';
+
+                if byte_cnt = len-1 then
+                    state <= WAIT_CHK;
+                else
+                    byte_cnt <= byte_cnt + 1;
+                    state <= WAIT_DATA;
+                end if;
             end if;
+
+        when WAIT_CHK =>
+            state <= GET_CHK;
 
         when GET_CHK =>
             if empty_o = '0' then
                 rd_i <= '1';
-                state <= WAIT_CHK;
+                if chk_calc = rdata_o then
+                    state <= EXECUTE;
+                else
+                    state <= WAIT_HEADER; -- Sai Checksum -> B? gói tin
+                end if;
             end if;
 
-        when WAIT_CHK =>
-            if chk_calc = rdata_o then
-                state <= EXECUTE;
-            else
-                state <= IDLE;
-            end if;
-
+        -- =========================================
+        -- PH?N TH?C THI (??y ra BUS)
+        -- =========================================
         when EXECUTE =>
             case cmd is
-
                 when x"01" =>
                     wr_en <= '1';
                     addr  <= addr_reg;
@@ -201,13 +206,15 @@ begin
 
                 when others =>
                     state <= IDLE;
-
             end case;
 
         when WAIT_RDATA =>
             data_reg <= rdata;
             state <= SEND_RESP;
 
+        -- =========================================
+        -- PH?N PH?N H?I (Ghi vào FIFO TX)
+        -- =========================================
         when SEND_RESP =>
             case resp_type is
                 when RESP_ACK =>
@@ -253,12 +260,10 @@ begin
             if full_o = '0' then
                 wdata_i <= data_reg(31 downto 24);
                 wd_i <= '1';
-
                 chk_tx <= data_reg(7 downto 0) xor
                           data_reg(15 downto 8) xor
                           data_reg(23 downto 16) xor
                           data_reg(31 downto 24);
-
                 state <= SEND_CHK;
             end if;
 
