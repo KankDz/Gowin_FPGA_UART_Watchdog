@@ -2,93 +2,120 @@ library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
-entity tb_uart_subsystem is
-end entity;
+entity tb_top_system is
+end tb_top_system;
 
-architecture behavior of tb_uart_subsystem is
-    signal clk        : std_logic := '0';
-    signal rst        : std_logic := '1';
-    signal rx_i       : std_logic := '1';
-    signal tx_o       : std_logic;
-    signal bus_wr_en  : std_logic;
-    signal bus_rd_en  : std_logic;
-    signal bus_addr   : std_logic_vector(7 downto 0);
-    signal bus_wdata  : std_logic_vector(31 downto 0);
-    signal bus_rdata  : std_logic_vector(31 downto 0) := x"DEADBEEF"; -- Gi? l?p data t? Regfile
+architecture behavior of tb_top_system is
 
-    constant clk_period  : time := 37.037 ns; -- 27 MHz
-    constant baud_period : time := 8.68 us;   -- 115200 bps
+    -- G?I TOP MODULE
+    component top_system is
+        port (
+            clk        : in  std_logic;
+            rst        : in  std_logic;
+            rx_i       : in  std_logic;
+            tx_o       : out std_logic;
+            wr_en      : out std_logic;
+            rd_en      : out std_logic;
+            addr       : out std_logic_vector(7 downto 0);
+            wdata      : out std_logic_vector(31 downto 0);
+            rdata      : in  std_logic_vector(31 downto 0)
+        );
+    end component;
 
-    -- Procedure g?i 1 byte chu?n
-    procedure uart_send_byte(data : std_logic_vector(7 downto 0); signal rx : out std_logic) is
+    -- DÂY K?T N?I
+    signal clk         : std_logic := '0';
+    signal rst         : std_logic := '1';
+    signal rx_i        : std_logic := '1'; -- Idle c?a UART luôn là '1'
+    signal tx_o        : std_logic;
+    
+    -- Dây Bus gi? l?p
+    signal wr_en       : std_logic;
+    signal rd_en       : std_logic;
+    signal addr        : std_logic_vector(7 downto 0);
+    signal wdata       : std_logic_vector(31 downto 0);
+    signal rdata       : std_logic_vector(31 downto 0) := x"12345678"; -- Data gi? l?p lúc b? ??c
+
+    -- THÔNG S? TH?I GIAN (Clock 27MHz, Baud 115200)
+    constant clk_period : time := 37 ns;   
+    constant bit_period : time := 8681 ns; 
+    signal sim_done     : boolean := false;
+
+    -- TH? T?C B?N BYTE QUA ???NG SERIAL (Gi? l?p PC)
+    procedure send_byte (data : std_logic_vector(7 downto 0); signal rx : out std_logic) is
     begin
-        rx <= '0'; wait for baud_period; -- Start bit
+        rx <= '0'; -- Start bit
+        wait for bit_period;
         for i in 0 to 7 loop
-            rx <= data(i); wait for baud_period;
+            rx <= data(i);
+            wait for bit_period;
         end loop;
-        rx <= '1'; wait for baud_period; -- Stop bit
+        rx <= '1'; -- Stop bit
+        wait for bit_period;
     end procedure;
 
 begin
-    uut: entity work.uart_subsystem
-    port map (
+    -- RÁP M?CH
+    uut: top_system port map (
         clk => clk, rst => rst, rx_i => rx_i, tx_o => tx_o,
-        bus_wr_en => bus_wr_en, bus_rd_en => bus_rd_en,
-        bus_addr => bus_addr, bus_wdata => bus_wdata, bus_rdata => bus_rdata
+        wr_en => wr_en, rd_en => rd_en, addr => addr,
+        wdata => wdata, rdata => rdata
     );
 
-    clk_process: process begin
-        clk <= '0'; wait for clk_period/2;
-        clk <= '1'; wait for clk_period/2;
-    end process;
-
-    stim_proc: process
+    -- T?O CLOCK 27MHz
+    clk_process :process
     begin
-        -- RESET
-        rst <= '1'; wait for 200 ns;
-        rst <= '0'; wait for 10 us;
-
-        -- CASE 1: SAI HEADER (G?i 0xA5 thay v� 0x55)
-        -- Engine ph?i b? qua to�n b? v� quay v? IDLE
-        report "Case 1: Wrong Header Test";
-        uart_send_byte(x"A5", rx_i);
-        wait for 100 us;
-
-        -- CASE 2: G�I TIN CHU?N (L?nh Write 0x01)
-        -- 0x55 (Hdr), 0x01 (CMD), 0x0A (Addr), 0x04 (Len), 0x12, 0x34, 0x56, 0x78 (Data), 0x48 (CHK)
-        report "Case 2: Valid Write Packet";
-        uart_send_byte(x"55", rx_i); -- Header
-        uart_send_byte(x"01", rx_i); -- CMD Write
-        uart_send_byte(x"0A", rx_i); -- ADDR
-        uart_send_byte(x"04", rx_i); -- LEN
-        uart_send_byte(x"12", rx_i); -- D0
-        uart_send_byte(x"34", rx_i); -- D1
-        uart_send_byte(x"56", rx_i); -- D2
-        uart_send_byte(x"78", rx_i); -- D3
-        uart_send_byte(x"48", rx_i); -- CHK (XOR c?a CMD..Data)
-        wait for 1 ms; -- ??i Engine x? l� v� TX g?i ACK (0xAA)
-
-        -- CASE 3: SAI CHECKSUM
-        report "Case 3: Checksum Error Test";
-        uart_send_byte(x"55", rx_i);
-        uart_send_byte(x"01", rx_i);
-        uart_send_byte(x"00", rx_i);
-        uart_send_byte(x"00", rx_i);
-        uart_send_byte(x"FF", rx_i); -- Checksum sai (?�ng ra ph?i l� 0x01 xor 0x00...)
-        wait for 200 us;
-
-        -- CASE 4: L?NH READ (CMD 0x02)
-        -- 0x55, 0x02, 0x10, 0x00, 0x12 (CHK)
-        report "Case 4: Valid Read Packet";
-        uart_send_byte(x"55", rx_i);
-        uart_send_byte(x"02", rx_i);
-        uart_send_byte(x"10", rx_i);
-        uart_send_byte(x"00", rx_i);
-        uart_send_byte(x"12", rx_i);
-        wait for 2 ms; -- Xem TX c� b?n l?i Header 0x55 + Data 0xDEADBEEF kh�ng
-
-        report "Simulation Complete" severity note;
+        while not sim_done loop
+            clk <= '0'; wait for clk_period/2;
+            clk <= '1'; wait for clk_period/2;
+        end loop;
         wait;
     end process;
 
-end architecture;
+    -- K?CH B?N ??I CHI?N
+    stim_proc: process
+    begin
+        -- 0. Reset h? th?ng
+        wait for 100 ns;
+        rst <= '0';
+        wait for 10 us;
+
+        -- =========================================================
+        -- TEST CASE 1: MÁY TÍNH RA L?NH "GHI" QUA UART
+        -- L?nh: Ghi giá tr? 0x1122 vào ??a ch? 0x10
+        -- Checksum = CMD(01) ^ ADDR(10) ^ LEN(02) ^ D0(11) ^ D1(22) = 0x20
+        -- =========================================================
+        -- B?n n?i ti?p t?ng bit qua dây cáp (rx_i)
+        send_byte(x"55", rx_i); -- Header
+        send_byte(x"01", rx_i); -- CMD (Write)
+        send_byte(x"10", rx_i); -- ADDR
+        send_byte(x"02", rx_i); -- LEN (2 bytes)
+        send_byte(x"11", rx_i); -- DATA 0
+        send_byte(x"22", rx_i); -- DATA 1
+        send_byte(x"20", rx_i); -- CHECKSUM
+        
+        -- ??i h? th?ng x? lý, ??y ra Bus, và m?ch TX t? ??ng b?n mã ACK (0xAA) v? PC
+        -- M?t kho?ng 1 khung truy?n TX (86us) + th?i gian x? lý
+        wait for 200 us; 
+
+        -- =========================================================
+        -- TEST CASE 2: MÁY TÍNH RA L?NH "??C" QUA UART
+        -- L?nh: ??c d? li?u t? ??a ch? 0xA5
+        -- Checksum = CMD(02) ^ ADDR(A5) ^ LEN(00) = 0xA7
+        -- =========================================================
+        send_byte(x"55", rx_i); -- Header
+        send_byte(x"02", rx_i); -- CMD (Read)
+        send_byte(x"A5", rx_i); -- ADDR
+        send_byte(x"00", rx_i); -- LEN (0 bytes)
+        send_byte(x"A7", rx_i); -- CHECKSUM
+
+        -- M?ch Engine s? ??c cái x"12345678" ? Bus, b?m nh?, tính Checksum m?i 
+        -- r?i nhét vào TX FIFO. Kh?i TX s? tu?n t? b?n 6 bytes v? PC.
+        -- 6 bytes * 86.8us = ~520us
+        wait for 800 us;
+
+        -- Ch?m d?t mô ph?ng
+        sim_done <= true;
+        wait;
+    end process;
+
+end behavior;
