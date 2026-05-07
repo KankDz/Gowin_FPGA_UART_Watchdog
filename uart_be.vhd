@@ -22,7 +22,8 @@ entity uart_engine is
         rd_en      : out std_logic;
         addr       : out std_logic_vector(7 downto 0);
         wdata      : out std_logic_vector(31 downto 0);
-        rdata      : in  std_logic_vector(31 downto 0)
+        rdata      : in  std_logic_vector(31 downto 0);
+		  kick_pulse : out std_logic
     );
 end;
 
@@ -68,6 +69,7 @@ begin
         wd_i      <= '0';
         wr_en     <= '0';
         rd_en     <= '0';
+		  kick_pulse <= '0';
         data_reg  <= (others => '0'); 
         addr      <= (others => '0');
         wdata     <= (others => '0');
@@ -79,6 +81,7 @@ begin
         wd_i  <= '0';
         wr_en <= '0';
         rd_en <= '0';
+		  kick_pulse <= '0';
 
         case state is
 
@@ -105,7 +108,7 @@ begin
             if empty_o = '0' then
                 cmd <= rdata_o;
                 chk_calc <= rdata_o;
-                rd_i <= '1';
+					 rd_i <= '1';
                 state <= WAIT_ADDR;
             end if;
 
@@ -197,6 +200,13 @@ begin
                     addr  <= addr_reg;
                     resp_type <= RESP_DATA;
                     state <= WAIT_RDATA;
+						  
+					when x"03" =>
+                    kick_pulse <= '1';  
+						  addr  <= addr_reg;		  
+						  resp_type  <= RESP_ACK; 
+						  state <= SEND_RESP;				  
+
 
                 when x"04" =>
                     rd_en <= '1';
