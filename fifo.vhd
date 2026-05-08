@@ -26,11 +26,7 @@ begin
     full     <= is_full;
     wr_valid <= '1' when (wr_i = '1' and is_full = '0') else '0';
     rd_valid <= '1' when (rd_i = '1' and is_empty = '0') else '0';
-
-    -- [FIXED] Mang r_data ra ngoài process ?? nó luôn bám sát rd_ptr
-    -- Nh? ram_block ?ã ???c kh?i t?o b?ng '0', r_data s? l?p t?c mang giá tr? 00000000 (H?t b? U)
     r_data <= ram_block(rd_ptr);
-
     process (clk)
     begin 
       if (rising_edge(clk)) then 
@@ -44,14 +40,12 @@ begin
         end if;
         
         if rd_valid = '1' then
-          -- ?ã xóa r_data ? ?ây, ch? làm nhi?m v? t?ng con tr?
           if rd_ptr = 15 then
             rd_ptr <= 0;
           else
             rd_ptr <= rd_ptr + 1;
           end if;
         end if;
-        
         if (wr_valid = '1' and rd_valid = '0') then
           count <= count + 1;
         elsif (wr_valid = '0' and rd_valid = '1') then

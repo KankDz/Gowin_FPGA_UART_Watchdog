@@ -32,7 +32,7 @@ architecture rtl of controller_tx is
             state <= bit_data;
           end if;
         when bit_data =>
-          if (done_bit = '1') then 
+          if (done_bit = '1' and done_tick = '1') then 
             state <= bit_stop;
           end if;
         when bit_stop =>
@@ -45,7 +45,7 @@ architecture rtl of controller_tx is
     end if;
    
   end process;
-  tx_done <= '1' when ((state = bit_stop) and (s_tick = '1'))  else '0';
+  tx_done <= '1' when ((state = bit_stop) and (done_tick = '1'))  else '0';
   clr_bit <= '1' when (state = idle) else '0';
   clr_tick <= '1' when (state = idle) or ((state = bit_start) and (done_tick = '1')) or ((state = bit_data) and (done_tick = '1')) else '0';
   en_tick <= '1' when   ((state = bit_start) and (s_tick = '1') and (done_tick = '0')) 

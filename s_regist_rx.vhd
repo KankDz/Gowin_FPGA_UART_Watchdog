@@ -23,7 +23,7 @@ signal temp : std_logic_vector (7 downto 0) := (others => '1');
           end if;
         end if;
     end process;
-  outp <= temp when xuat = '1' else  "11111111";
+  outp <= temp;
 
 
 end rtl;

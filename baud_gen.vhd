@@ -11,11 +11,8 @@ end baud_gen;
 
 architecture rtl of baud_gen is
     constant MAX_COUNT : integer := 15;
-    
-    -- [T?I ?U] Ép ki?u range ?? Synthesizer ch? dùng thanh ghi 4-bit thay vì 32-bit
     signal count       : integer range 0 to MAX_COUNT := 0; 
 begin
-
     process(clk)
     begin
         if rising_edge(clk) then
@@ -28,5 +25,4 @@ begin
             end if;
         end if;
     end process;
-
 end rtl;
