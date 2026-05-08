@@ -1,3 +1,4 @@
+
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -6,23 +7,18 @@ entity uart_engine is
     port (
         clk        : in  std_logic;
         rst        : in  std_logic;
-
-        -- RX FIFO
         empty_o    : in  std_logic;
         rdata_o    : in  std_logic_vector(7 downto 0);
         rd_i       : out std_logic;
-
-        -- TX FIFO
         full_o     : in  std_logic;
         wdata_i    : out std_logic_vector(7 downto 0);
         wd_i       : out std_logic;
-
-        -- BUS
         wr_en      : out std_logic;
         rd_en      : out std_logic;
         addr       : out std_logic_vector(7 downto 0);
         wdata      : out std_logic_vector(31 downto 0);
-        rdata      : in  std_logic_vector(31 downto 0)
+        rdata      : in  std_logic_vector(31 downto 0);
+        kick_pulse : out std_logic
     );
 end;
 
@@ -30,7 +26,7 @@ architecture rtl of uart_engine is
 
     type state_type is (
         IDLE,
-        GET_HEADER, WAIT_HEADER,
+        WAIT_HEADER, 
         GET_CMD, WAIT_CMD,
         GET_ADDR, WAIT_ADDR,
         GET_LEN, WAIT_LEN,
@@ -38,6 +34,7 @@ architecture rtl of uart_engine is
         GET_CHK, WAIT_CHK,
         EXECUTE, WAIT_RDATA,
         SEND_RESP,
+        SEND_ACK_DATA,   -- [FIX] Da them state moi vao day
         SEND_HEADER,
         SEND_B0, SEND_B1, SEND_B2, SEND_B3,
         SEND_CHK
@@ -63,147 +60,139 @@ begin
 process(clk, rst)
 begin
     if rst = '1' then
-        state   <= IDLE;
-        rd_i    <= '0';
-        wd_i    <= '0';
-        wr_en   <= '0';
-        rd_en   <= '0';
-		  data_reg  <= (others => '0'); 
+        state      <= IDLE;
+        rd_i       <= '0';
+        wd_i       <= '0';
+        wr_en      <= '0';
+        rd_en      <= '0';
+        kick_pulse <= '0';
+        data_reg   <= (others => '0'); 
+        addr       <= (others => '0');
+        wdata      <= (others => '0');
+        wdata_i    <= (others => '0');
 
     elsif rising_edge(clk) then
-
-      
-        rd_i  <= '0';
-        wd_i  <= '0';
-        wr_en <= '0';
-        rd_en <= '0';
-		 
+        rd_i       <= '0';
+        wd_i       <= '0';
+        wr_en      <= '0';
+        rd_en      <= '0';
+        kick_pulse <= '0';
 
         case state is
 
         when IDLE =>
             if empty_o = '0' then
-                rd_i <= '1';
-                state <= WAIT_HEADER;
+                rd_i <= '1'; 
+                if rdata_o = x"55" then
+                    state <= WAIT_CMD;
+                else
+                    state <= WAIT_HEADER; 
+                end if;
             end if;
 
         when WAIT_HEADER =>
-            if rdata_o = x"55" then
-                state <= GET_CMD;
-            else
-                state <= IDLE;
-            end if;
+            state <= IDLE; 
 
+        when WAIT_CMD => state <= GET_CMD;
         when GET_CMD =>
             if empty_o = '0' then
-                rd_i <= '1';
-                state <= WAIT_CMD;
-            end if;
-
-        when WAIT_CMD =>
-            cmd      <= rdata_o;
-            chk_calc <= rdata_o;
-            state    <= GET_ADDR;
-
-        when GET_ADDR =>
-            if empty_o = '0' then
+                cmd <= rdata_o;
+                chk_calc <= rdata_o;
                 rd_i <= '1';
                 state <= WAIT_ADDR;
             end if;
 
-        when WAIT_ADDR =>
-            addr_reg <= rdata_o;
-            chk_calc <= chk_calc xor rdata_o;
-            state <= GET_LEN;
-
-        when GET_LEN =>
+        when WAIT_ADDR => state <= GET_ADDR;
+        when GET_ADDR =>
             if empty_o = '0' then
+                addr_reg <= rdata_o;
+                chk_calc <= chk_calc xor rdata_o;
                 rd_i <= '1';
                 state <= WAIT_LEN;
             end if;
 
-        when WAIT_LEN =>
-            if unsigned(rdata_o) <= 4 then
-					data_reg  <= (others => '0'); 
-					
-                len <= to_integer(unsigned(rdata_o));
-                chk_calc <= chk_calc xor rdata_o;
-                byte_cnt <= 0;
-
-                if unsigned(rdata_o) = 0 then
-                    state <= GET_CHK;
+        when WAIT_LEN => state <= GET_LEN;
+        when GET_LEN =>
+            if empty_o = '0' then
+                if unsigned(rdata_o) <= 4 then
+                    data_reg <= (others => '0'); 
+                    len <= to_integer(unsigned(rdata_o));
+                    chk_calc <= chk_calc xor rdata_o;
+                    byte_cnt <= 0;
+                    rd_i <= '1';
+                    
+                    if unsigned(rdata_o) = 0 then
+                        state <= WAIT_CHK;
+                    else
+                        state <= WAIT_DATA;
+                    end if;
                 else
-                    state <= GET_DATA;
+                    rd_i <= '1';
+                    state <= WAIT_HEADER; 
                 end if;
-            else
-                state <= IDLE;
             end if;
 
+        when WAIT_DATA => state <= GET_DATA;
         when GET_DATA =>
             if empty_o = '0' then
+                case byte_cnt is
+                    when 0 => data_reg(7 downto 0)   <= rdata_o;
+                    when 1 => data_reg(15 downto 8)  <= rdata_o;
+                    when 2 => data_reg(23 downto 16) <= rdata_o;
+                    when 3 => data_reg(31 downto 24) <= rdata_o;
+                    when others => null;
+                end case;
+
+                chk_calc <= chk_calc xor rdata_o;
                 rd_i <= '1';
-                state <= WAIT_DATA;
+
+                if byte_cnt = len-1 then
+                    state <= WAIT_CHK;
+                else
+                    byte_cnt <= byte_cnt + 1;
+                    state <= WAIT_DATA;
+                end if;
             end if;
 
-        when WAIT_DATA =>
-            case byte_cnt is
-                when 0 => data_reg(7 downto 0)   <= rdata_o;
-                when 1 => data_reg(15 downto 8)  <= rdata_o;
-                when 2 => data_reg(23 downto 16) <= rdata_o;
-                when 3 => data_reg(31 downto 24) <= rdata_o;
-                when others => null;
-            end case;
-
-            chk_calc <= chk_calc xor rdata_o;
-
-            if byte_cnt = len-1 then
-                state <= GET_CHK;
-            else
-                byte_cnt <= byte_cnt + 1;
-                state <= GET_DATA;
-            end if;
-
+        when WAIT_CHK => state <= GET_CHK;
         when GET_CHK =>
             if empty_o = '0' then
                 rd_i <= '1';
-                state <= WAIT_CHK;
+                if chk_calc = rdata_o then
+                    state <= EXECUTE;
+                else
+                    state <= WAIT_HEADER; 
+                end if;
             end if;
 
-        when WAIT_CHK =>
-            if chk_calc = rdata_o then
-                state <= EXECUTE;
-            else
-                state <= IDLE;
-            end if;
-
-        when EXECUTE =>
+      when EXECUTE =>
             case cmd is
-
-                when x"01" =>
+                when x"01" => -- WRITE
                     wr_en <= '1';
-                    addr  <= addr_reg;
+                    addr  <= addr_reg; -- Gi? ??a ch?
                     wdata <= data_reg;
                     resp_type <= RESP_ACK;
                     state <= SEND_RESP;
 
-                when x"02" =>
+                when x"02" | x"04" => -- READ DATA ho?c STATUS
                     rd_en <= '1';
-                    addr  <= addr_reg;
-                    resp_type <= RESP_DATA;
+                    addr  <= addr_reg; -- Gi? ??a ch?
+                    if cmd = x"02" then resp_type <= RESP_DATA;
+                    else resp_type <= RESP_STATUS; end if;
                     state <= WAIT_RDATA;
+                          
+                when x"03" => -- KICK
+                    kick_pulse <= '1';  
+                    addr  <= addr_reg;          
+                    resp_type  <= RESP_ACK; 
+                    state <= SEND_RESP;                 
 
-                when x"04" =>
-                    rd_en <= '1';
-                    addr  <= addr_reg ;
-                    resp_type <= RESP_STATUS;
-                    state <= WAIT_RDATA;
-
-                when others =>
-                    state <= IDLE;
-
+                when others => state <= IDLE;
             end case;
 
         when WAIT_RDATA =>
+            rd_en <= '1';
+            addr  <= addr_reg; -- [QUAN TR?NG] Ph?i gi? ??a ch? ? ?ây n?a!
             data_reg <= rdata;
             state <= SEND_RESP;
 
@@ -211,14 +200,21 @@ begin
             case resp_type is
                 when RESP_ACK =>
                     if full_o = '0' then
-                        wdata_i <= x"AA";
+                        wdata_i <= x"55";       -- B?n Header 55
                         wd_i <= '1';
-                        state <= IDLE;
+                        state <= SEND_ACK_DATA; 
                     end if;
-
                 when others =>
-                    state <= SEND_HEADER;
+                    state <= SEND_HEADER;       -- Cho Data va Status
             end case;
+
+        -- [FIX] State rieng de ban not byte AA
+        when SEND_ACK_DATA =>
+            if full_o = '0' then
+                wdata_i <= x"AA";       
+                wd_i <= '1';
+                state <= IDLE;          
+            end if;
 
         when SEND_HEADER =>
             if full_o = '0' then
@@ -252,12 +248,10 @@ begin
             if full_o = '0' then
                 wdata_i <= data_reg(31 downto 24);
                 wd_i <= '1';
-
                 chk_tx <= data_reg(7 downto 0) xor
                           data_reg(15 downto 8) xor
                           data_reg(23 downto 16) xor
                           data_reg(31 downto 24);
-
                 state <= SEND_CHK;
             end if;
 

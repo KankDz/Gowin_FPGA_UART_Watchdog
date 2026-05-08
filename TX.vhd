@@ -1,3 +1,4 @@
+
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -35,7 +36,7 @@ architecture rtl of TX is
 
   component controller_tx is 
     Port (
-      -- ?Ã B? CHÂN rst TRONG COMPONENT
+      -- ?  B? CH N rst TRONG COMPONENT
       clk          : in  std_logic;
       tx_start     : in  std_logic;
       s_tick       : in  std_logic;
@@ -80,7 +81,7 @@ begin
 
   U2_CONTROLLER : controller_tx 
     port map (
-      -- ?Ã B? DÂY N?I rst
+      -- ?  B? D Y N?I rst
       clk          => clk,
       tx_start     => tx_start,
       s_tick       => s_tick,

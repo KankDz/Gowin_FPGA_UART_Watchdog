@@ -1,23 +1,27 @@
+
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
 entity regfile is
     port (
-        clk   : in  std_logic;
-        rst_n : in  std_logic;
+        clk               : in  std_logic;
+        rst_n             : in  std_logic;
 
-        wr_en : in  std_logic;
-        rd_en : in  std_logic;
-        addr  : in  std_logic_vector(7 downto 0);
-        wdata : in  std_logic_vector(31 downto 0);
-        rdata : out std_logic_vector(31 downto 0);
-        
-        -- Input tá»« watchdog
-        en_effective_i  : in std_logic;
-        fault_active_i  : in std_logic;
-        enout_i         : in std_logic;
-        wdo_i           : in std_logic;
+        wr_en             : in  std_logic;
+        rd_en             : in  std_logic;
+        addr              : in  std_logic_vector(7 downto 0);
+        wdata             : in  std_logic_vector(31 downto 0);
+        rdata             : out std_logic_vector(31 downto 0);
+        kick_pulse_i      : in std_logic;  -- t? UART
+        btn_kick_i        : in std_logic;  -- t? nút
+        wdi_o             : out std_logic; 
+          
+        -- Input t? watchdog
+        en_effective_i    : in std_logic;
+        fault_active_i    : in std_logic;
+        enout_i           : in std_logic;
+        wdo_i             : in std_logic;
 
         -- Output config
         en_sw_o           : out std_logic;
@@ -26,7 +30,7 @@ entity regfile is
         reset_sw_o        : out std_logic;
         twd_ms_o          : out std_logic_vector(31 downto 0);
         trst_ms_o         : out std_logic_vector(31 downto 0);
-        arm_delay_us_o    : out std_logic_vector(15 downto 0)
+        arm_delay_us_o    : out std_logic_vector(15 downto 0) -- TR? L?I 16-BIT
     );
 end entity;
 
@@ -39,10 +43,18 @@ architecture rtl of regfile is
     constant REG_ARM_DELAY_US : std_logic_vector(7 downto 0) := x"0C";
     constant REG_STATUS       : std_logic_vector(7 downto 0) := x"10";
 
-    -- Default values
-    constant DEFAULT_TWD_MS       : std_logic_vector(31 downto 0) := std_logic_vector(to_unsigned(1600, 32));
-    constant DEFAULT_TRST_MS      : std_logic_vector(31 downto 0) := std_logic_vector(to_unsigned(200, 32));
-    constant DEFAULT_ARM_DELAY_US : std_logic_vector(15 downto 0) := std_logic_vector(to_unsigned(150, 16));
+    -- Default values (?ã quy ??i sang s? xung nh?p Clock 27MHz)
+    -- ===============================================================
+    -- DEFAULT VALUES (Tinh theo tan so Clock 27MHz cua Board)
+    -- ===============================================================
+    -- Twd (5.0 giay = 5000ms): 5.0 * 27,000,000 = 135000000
+    constant DEFAULT_TWD_MS       : std_logic_vector(31 downto 0) := std_logic_vector(to_unsigned(135000000, 32));
+    
+    -- tRST (200ms = 0.2 giay): 0.2 * 27,000,000 = 5400000
+    constant DEFAULT_TRST_MS      : std_logic_vector(31 downto 0) := std_logic_vector(to_unsigned(5400000, 32));
+    
+    -- tARM (150us): 150 * 27 = 4050
+    constant DEFAULT_ARM_DELAY_US : std_logic_vector(15 downto 0) := std_logic_vector(to_unsigned(4050, 16));
 
     -- CTRL register
     signal ctrl_en_sw_r           : std_logic := '0';
@@ -53,16 +65,19 @@ architecture rtl of regfile is
     -- Config registers
     signal twd_ms_r       : std_logic_vector(31 downto 0) := DEFAULT_TWD_MS;
     signal trst_ms_r      : std_logic_vector(31 downto 0) := DEFAULT_TRST_MS;
-    signal arm_delay_us_r : std_logic_vector(15 downto 0) := DEFAULT_ARM_DELAY_US;
+    signal arm_delay_us_r : std_logic_vector(15 downto 0) := DEFAULT_ARM_DELAY_US; -- 16-BIT
 
     -- Status
     signal status_r : std_logic_vector(31 downto 0);
     signal rdata_r  : std_logic_vector(31 downto 0);
+     
+    signal kick_sel : std_logic;
+    signal kick_d   : std_logic := '0';
+    signal wdi_r    : std_logic := '1';
 
 begin
 
 -- WRITE 
-
 process(clk, rst_n)
 begin
     if rst_n = '0' then
@@ -84,7 +99,6 @@ begin
                     ctrl_en_sw_r    <= wdata(0);
                     ctrl_wdi_src_r  <= wdata(1);
                     ctrl_reset_sw_r <= wdata(3);
-
                     
                     if wdata(2) = '1' then
                         ctrl_clr_fault_pulse_r <= '1';
@@ -97,7 +111,7 @@ begin
                     trst_ms_r <= wdata;
 
                 when REG_ARM_DELAY_US =>
-                    arm_delay_us_r <= wdata(15 downto 0);
+                    arm_delay_us_r <= wdata(15 downto 0); -- L?Y 16 BIT ??U L?I
 
                 when others =>
                     null;
@@ -107,7 +121,6 @@ begin
 end process;
 
 -- STATUS 
-
 process(en_effective_i, fault_active_i, enout_i, wdo_i)
 begin
     status_r <= (others => '0');
@@ -117,10 +130,8 @@ begin
     status_r(3) <= wdo_i;
 end process;
 
-
 -- READ
-
-process(rd_en, addr, ctrl_en_sw_r, ctrl_wdi_src_r, ctrl_reset_sw_r,
+process(rd_en, addr,fault_active_i,ctrl_en_sw_r, ctrl_wdi_src_r, ctrl_reset_sw_r,
         twd_ms_r, trst_ms_r, arm_delay_us_r, status_r)
 begin
     rdata_r <= (others => '0');
@@ -140,7 +151,7 @@ begin
                 rdata_r <= trst_ms_r;
 
             when REG_ARM_DELAY_US =>
-                rdata_r(15 downto 0) <= arm_delay_us_r;
+                rdata_r(15 downto 0) <= arm_delay_us_r; -- GHÉP L?I 16 BIT
 
             when REG_STATUS =>
                 rdata_r <= status_r;
@@ -151,8 +162,27 @@ begin
     end if;
 end process;
 
--- OUTPUT
+-- WDI 
+    kick_sel <= btn_kick_i when ctrl_wdi_src_r = '0' else kick_pulse_i;
 
+process(clk, rst_n)
+    begin
+    if rst_n = '0' then
+        kick_d <= '0';
+        wdi_r  <= '1';
+
+    elsif rising_edge(clk) then
+        kick_d <= kick_sel;
+
+        if (kick_d = '1' and kick_sel = '0') then
+            wdi_r <= '0';
+        else
+            wdi_r <= '1';
+        end if;
+    end if;
+end process;
+
+-- OUTPUT
 rdata             <= rdata_r;
 en_sw_o           <= ctrl_en_sw_r;
 wdi_src_o         <= ctrl_wdi_src_r;
@@ -161,5 +191,6 @@ reset_sw_o        <= ctrl_reset_sw_r;
 twd_ms_o          <= twd_ms_r;
 trst_ms_o         <= trst_ms_r;
 arm_delay_us_o    <= arm_delay_us_r;
+wdi_o             <= wdi_r;
 
 end architecture;
